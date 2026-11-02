@@ -1,0 +1,33 @@
+// Checks the leaderboard, fleet and save-code API against a running server: node api-test.mjs http://localhost:8787
+const BASE = (process.argv[2] || 'http://localhost:8787').replace(/^ws/, 'http');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let fails = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fails++; };
+const post = async (p, b) => { const r = await fetch(`${BASE}/api/${p}`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify(b) }); return { status: r.status, j: await r.json() }; };
+const get = async p => { const r = await fetch(`${BASE}/api/${p}`); return { status: r.status, j: await r.json() }; };
+const ABC = 'BCDFGHJKLMNPQRSTVWXZ', rnd = n => Array.from({ length: n }, () => ABC[Math.floor(Math.random() * 20)]).join('');
+const DAY = 864e5, now = Date.now();
+function isoWeek(ms) { const d = new Date(ms), mon = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - (d.getUTCDay() + 6) % 7); const th = new Date(mon + 3 * DAY), y = th.getUTCFullYear(); return `${y}-W${String(1 + Math.floor((th - Date.UTC(y, 0, 1)) / (7 * DAY))).padStart(2, '0')}`; }
+const W = isoWeek(now), M = new Date(now).toISOString().slice(0, 7);
+const A = { pid: rnd(12), key: rnd(24), nm: 5 }, B = { pid: rnd(12), key: rnd(24), nm: 77 };
+let r = await post('score', Object.assign({ b: 'ev:' + W, s: 120 }, A)); ok(r.status === 200 && r.j.rank === 1, 'first score registers the player and ranks 1st');
+r = await post('score', Object.assign({ b: 'ev:' + W, s: 300 }, B)); ok(r.j.rank === 1, 'a higher score ranks 1st');
+r = await post('score', Object.assign({ b: 'ev:' + W, s: 999 }, A, { key: rnd(24) })); ok(r.status === 403, 'a wrong key is refused');
+r = await post('score', Object.assign({ b: 'ev:' + W, s: 50 }, A)); ok(r.status === 429, 'a second score within 8 s is refused');
+r = await post('score', Object.assign({ b: 'ev:2020-W01', s: 50 }, B)); ok(r.j.err === 'board' || r.status === 429, 'an old week is closed');
+r = await post('score', Object.assign({ b: 'ar:' + M, s: 820 }, A)); ok(r.status === 200, 'an arena rating is taken');
+r = await get(`board?b=ev:${W}&pid=${A.pid}`); ok(r.j.top.length === 2 && r.j.top[0].nm === 77 && r.j.top[1].me && r.j.me.rank === 2 && !('pid' in r.j.top[0]), 'board: order, names as numbers, me marked, no ids');
+r = await post('fleet-new', Object.assign({ fnm: 33 }, A)); const fc = r.j.code; ok(/^[A-Z]{5}$/.test(fc || ''), 'a fleet is started with a five-letter code');
+r = await post('fleet-join', Object.assign({ code: fc }, B)); ok(r.j.code === fc, 'a second captain joins');
+r = await post('fleet-join', Object.assign({ code: 'ZZZZZ' }, B)); ok(r.status === 404 || r.status === 429, 'a wrong fleet code is refused');
+r = await get(`fleet?code=${fc}&w=${W}&pid=${B.pid}`); ok(r.j.nm === 33 && r.j.members.length === 2 && r.j.total === 420 && r.j.members.some(m => m.me), 'fleet: members, scores and total');
+await sleep(400); r = await get(`board?b=fl:${W}&pid=${A.pid}`); ok(r.j.top.length === 1 && r.j.top[0].s === 420 && r.j.top[0].m === 2 && r.j.top[0].me, 'fleet board adds members up');
+const save = JSON.stringify({ v: 2, gold: 12345, gems: 99 });
+r = await post('save', Object.assign({ data: save }, A)); const sc = r.j.code; ok(/^[A-Z]{10}$/.test(sc || ''), 'a save code is made');
+r = await post('load', { code: sc }); ok(r.j.data === save, 'the save code loads the same career');
+await sleep(3100);
+r = await post('load', { code: 'BBBBBBBBBB' }); ok(r.status === 404, 'a wrong save code is refused');
+r = await post('load', { code: 'BBBBBBBBBB' }); ok(r.status === 429, 'guessing codes quickly is slowed down');
+r = await post("fleet-leave", A); await sleep(400); r = await get(`fleet?code=${fc}&w=${W}`); ok(r.j.members.length === 1, 'leaving the fleet');
+r = await post('score', Object.assign({ b: 'ev:' + W, s: 10 }, A)); await sleep(400); r = await get(`board?b=ev:${W}&pid=${A.pid}`); ok(r.j.me.s === 120, 'event tokens never go down');
+const big = await post('save', Object.assign({ data: 'x'.repeat(500 * 1024) }, B)); ok(big.status === 413 || big.status === 400, 'an oversized save is refused');
+console.log(fails ? `${fails} FAILED` : 'all passed'); process.exit(fails ? 1 : 0);

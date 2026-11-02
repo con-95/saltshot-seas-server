@@ -41,8 +41,29 @@ new rooms can't open until then.
 - Names are cleaned to letters, digits, spaces and `' -`, 18 characters at most. There is no chat beyond four
   fixed quick messages.
 
+## Leaderboards, fleets and save codes (game version 56)
+
+The same Worker also answers a small JSON API under `/api`, kept by one more SQLite-backed Durable Object (`Boards`,
+binding `BOARDS`, added by migration `v2` in `wrangler.toml`; Cloudflare creates it on the next deploy).
+
+- `POST /api/score` `{pid, key, nm, b, s}`: a player's score on a board. `b` is `ev:<ISO week>` (this week's event
+  tokens; they only go up) or `ar:<YYYY-MM>` (this month's arena rating). Only the current (or just-ended) week and month
+  are open. At most one score per board every 8 seconds per player, and event scores can't climb faster than a keen player
+  earns (35 tokens a minute since the last score, plus 300; a first score at most 3,000).
+- `GET /api/board?b=…&pid=…`: the top 50 and your own rank. `fl:<ISO week>` adds the event board up by fleet.
+- `POST /api/fleet-new` `{pid, key, fnm}`, `fleet-join` `{pid, key, code}`, `fleet-leave` `{pid, key}`; `GET
+  /api/fleet?code=…&w=…`: fleets of up to 20 captains with five-letter codes, and their members' weekly scores.
+- `POST /api/save` `{pid, key, data}` makes a ten-letter save code (one per player; a new one replaces the old) that
+  `POST /api/load` `{code}` returns for 30 days. Guesses are slowed to one every 3 seconds per address.
+
+Players are a random 12-letter id and a 24-letter secret made by the game; the server keeps only the secret's SHA-256.
+**Nobody can type text that other players see:** names are numbers that the game turns into names from fixed word lists
+(captains: 576 names, fleets: 256), so there is nothing to moderate. Old data is cleared now and then: scores after
+40 days, save codes after 30, empty fleets after a week, players with nothing left after 60 days. New players are limited to one
+a minute from any one address, save codes to one every 10 seconds, and request bodies are checked by size before they are read. `node test/api-test.mjs http://localhost:8787` checks the API.
+
 ## Testing without Cloudflare
 
 `node test/local-server.mjs 8787` runs `worker.js` on your own computer with small stand-ins for the Workers
-runtime (Node 18 or newer, no packages needed). Point the game at `ws://localhost:8787`.
+runtime (Node 22.5 or newer for the leaderboards' SQLite, no packages needed). Point the game at `ws://localhost:8787`.
 `node test/protocol-test.mjs ws://localhost:8787` checks the server's rules.

@@ -10,6 +10,15 @@ workers_dev = true
 name = "ROOMS"
 class_name = "Room"
 
+# leaderboards, fleets and save codes (game version 56): one more SQLite-backed Durable Object
+[[durable_objects.bindings]]
+name = "BOARDS"
+class_name = "Boards"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Boards"]

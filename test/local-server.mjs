@@ -29,7 +29,12 @@ class ServerEnd {
 }
 globalThis.WebSocketPair = class { constructor() { this[0] = { client: true }; this[1] = new ServerEnd(bindSocket); } };
 
-const { default: worker, Room } = await import(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'worker.js'));
+const { default: worker, Room, Boards } = await import(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'worker.js'));
+// the Boards Durable Object's SQLite storage, from Node's own sqlite (Node 22.5 or newer)
+const { DatabaseSync } = await import('node:sqlite');
+const db = new DatabaseSync(process.env.BOARDS_DB || ':memory:');
+const sqlStore = { exec(q, ...b) { const st = db.prepare(q); const rows = /^\s*(select|with)/i.test(q) ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows, one: () => rows[0], [Symbol.iterator]: () => rows[Symbol.iterator]() }; } };
+let boards = null;
 const rooms = new Map();
 function roomFor(name) {
   if (rooms.has(name)) return rooms.get(name);
@@ -42,7 +47,8 @@ function roomFor(name) {
   const r = new Room(ctx, {}); r._sockets = sockets;
   rooms.set(name, r); return r;
 }
-const env = { ROOMS: { idFromName: n => n, get: id => ({ fetch: req => roomFor(id).fetch(req) }) } };
+const env = { ROOMS: { idFromName: n => n, get: id => ({ fetch: req => roomFor(id).fetch(req) }) },
+  BOARDS: { idFromName: n => n, get: () => ({ fetch: req => (boards || (boards = new Boards({ storage: { sql: sqlStore } }, {}))).fetch(req) }) } };
 
 // ---- WebSocket framing (RFC 6455, server side)
 function writeFrame(sock, op, payload) {
@@ -78,7 +84,9 @@ function attach(sock, end) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const r = await worker.fetch(new Request('http://localhost:' + PORT + req.url, { headers: req.headers }), env);
+  const chunks = []; for await (const c of req) chunks.push(c);
+  const body = req.method === 'POST' ? Buffer.concat(chunks).toString('utf8') : undefined;
+  const r = await worker.fetch(new Request('http://localhost:' + PORT + req.url, { method: req.method, headers: req.headers, body }), env);
   res.writeHead(r.status, Object.assign({ 'access-control-allow-origin': '*' }, r.headers)); res.end(r.body == null ? '' : String(r.body));
 });
 server.on('upgrade', async (req, sock) => {
