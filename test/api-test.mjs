@@ -30,4 +30,13 @@ r = await post('load', { code: 'BBBBBBBBBB' }); ok(r.status === 429, 'guessing c
 r = await post("fleet-leave", A); await sleep(400); r = await get(`fleet?code=${fc}&w=${W}`); ok(r.j.members.length === 1, 'leaving the fleet');
 r = await post('score', Object.assign({ b: 'ev:' + W, s: 10 }, A)); await sleep(400); r = await get(`board?b=ev:${W}&pid=${A.pid}`); ok(r.j.me.s === 120, 'event tokens never go down');
 const big = await post('save', Object.assign({ data: 'x'.repeat(500 * 1024) }, B)); ok(big.status === 413 || big.status === 400, 'an oversized save is refused');
+// cloud backups (game version 59)
+const bk = JSON.stringify({ v: 2, gold: 777, gems: 5 });
+r = await post('backup', Object.assign({ data: bk }, A)); ok(r.j && r.j.ok, 'a backup is stored');
+r = await post('backup', Object.assign({ data: bk + ' ' }, A)); ok(r.status === 429, 'a second backup straight away is slowed down');
+await sleep(3100); r = await post('restore', { pid: A.pid, key: A.key }); ok(r.j && r.j.data === bk && r.j.t > 0, 'the backup restores with the id and key');
+await sleep(3100); r = await post('restore', { pid: A.pid, key: B.key }); ok(r.status === 404, 'a wrong key restores nothing');
+await sleep(3100); r = await post('restore', { pid: 'BBBBBBBBBBBB', key: A.key }); ok(r.status === 404, 'an unknown player restores nothing');
+r = await post('restore', { pid: A.pid, key: A.key }); ok(r.status === 429, 'restore guesses are slowed down');
+await sleep(3100); r = await post('restore', { pid: 'short', key: 'x' }); ok(r.status === 400, 'a malformed recovery code is refused');
 console.log(fails ? `${fails} FAILED` : 'all passed'); process.exit(fails ? 1 : 0);

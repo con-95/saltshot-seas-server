@@ -67,3 +67,10 @@ a minute from any one address, save codes to one every 10 seconds, and request b
 `node test/local-server.mjs 8787` runs `worker.js` on your own computer with small stand-ins for the Workers
 runtime (Node 22.5 or newer for the leaderboards' SQLite, no packages needed). Point the game at `ws://localhost:8787`.
 `node test/protocol-test.mjs ws://localhost:8787` checks the server's rules.
+
+## Cloud backups (game version 59)
+
+`POST /api/backup` `{pid, key, nm, data}` stores the player's latest save (one row per player, replaced each time, at
+most one a minute, up to 400 KB). `POST /api/restore` `{pid, key}` returns it (never registers a new player; a wrong key
+or unknown player gets 404, and tries from one address are slowed to one every 3 seconds). The game shows the id and key
+together as a 36-letter recovery code. Backups are deleted 400 days after the last one.

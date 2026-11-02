@@ -156,6 +156,11 @@ function cleanName(v) {
  * which only go up within a week) and "ar:<YYYY-MM>" (arena rating); "fl:<ISO week>" is read-only, the members' event
  * scores added up per fleet. Old rows are cleared now and then: scores after 40 days, save codes after 30, empty
  * fleets after a week.
+ *
+ * Cloud backups (game version 59): backups (pid, the save as text, time). The game sends its save now and then (every
+ * few minutes while it changes, and when the app goes to the background); one row per player, replaced each time,
+ * kept for 400 days after the last one. Restoring needs the player's id and key, which the game shows as a 36-letter
+ * recovery code.
  */
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
 const ABC = 'BCDFGHJKLMNPQRSTVWXZ';
@@ -189,6 +194,7 @@ export class Boards {
       'CREATE TABLE IF NOT EXISTS fleets (code TEXT PRIMARY KEY, nm INTEGER NOT NULL, owner TEXT NOT NULL, t INTEGER NOT NULL)',
       'CREATE INDEX IF NOT EXISTS players_fleet ON players (fleet)',
       'CREATE TABLE IF NOT EXISTS saves (code TEXT PRIMARY KEY, pid TEXT NOT NULL, data TEXT NOT NULL, t INTEGER NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS backups (pid TEXT PRIMARY KEY, data TEXT NOT NULL, t INTEGER NOT NULL)',
     ]) this.sql.exec(q);
   }
   rows(q, ...b) { return this.sql.exec(q, ...b).toArray(); }
@@ -214,8 +220,9 @@ export class Boards {
     const now = Date.now();
     this.sql.exec('DELETE FROM scores WHERE t < ?', now - 40 * DAY);
     this.sql.exec('DELETE FROM saves WHERE t < ?', now - 30 * DAY);
+    this.sql.exec('DELETE FROM backups WHERE t < ?', now - 400 * DAY);
     this.sql.exec('DELETE FROM fleets WHERE t < ? AND code NOT IN (SELECT fleet FROM players WHERE fleet IS NOT NULL)', now - 7 * DAY);
-    this.sql.exec('DELETE FROM players WHERE t < ? AND fleet IS NULL AND pid NOT IN (SELECT pid FROM scores) AND pid NOT IN (SELECT pid FROM saves)', now - 60 * DAY);
+    this.sql.exec('DELETE FROM players WHERE t < ? AND fleet IS NULL AND pid NOT IN (SELECT pid FROM scores) AND pid NOT IN (SELECT pid FROM saves) AND pid NOT IN (SELECT pid FROM backups)', now - 60 * DAY);
   }
   async fetch(req) {
     const url = new URL(req.url), path = url.pathname.slice(5), now = Date.now(), ip = req.headers.get('cf-connecting-ip') || 'local';
@@ -239,6 +246,14 @@ export class Boards {
         const r = this.one('SELECT data, t FROM saves WHERE code = ?', c);
         if (!r || now - r.t > 30 * DAY) return fail('nosave', 'No career has that code. Codes last 30 days; check the letters.', 404);
         return json({ data: r.data });
+      }
+      if (path === 'restore') { // a cloud backup, for whoever has the player's id and key (never registers a new player)
+        if (this.limited('rb:' + ip, 3000)) return fail('slow', 'Wait a few seconds before trying again.', 429);
+        const pid = String(body.pid || ''), key = String(body.key || '');
+        if (!ID_RE.test(pid) || !KEY_RE.test(key)) return fail('nobackup', 'Recovery codes are 36 letters. Check them and try again.');
+        const p = this.one('SELECT kh FROM players WHERE pid = ?', pid), r = p && this.one('SELECT data, t FROM backups WHERE pid = ?', pid);
+        if (!p || !r || p.kh !== await sha(key)) return fail('nobackup', 'No backup matches that recovery code. Check the letters.', 404);
+        return json({ data: r.data, t: r.t });
       }
       const me = await this.who(body, ip); if (me === 'slow') return fail('slow', 'Too many new players from here. Try again in a minute.', 429);
       if (!me) return fail('auth', 'This phone could not be recognised by the server.', 403);
@@ -272,6 +287,13 @@ export class Boards {
         return json({ code: c });
       }
       if (path === 'fleet-leave') { this.sql.exec('UPDATE players SET fleet = NULL, t = ? WHERE pid = ?', now, me.pid); return json({ ok: true }); }
+      if (path === 'backup') { // version 59: this player's latest save, replacing the last one
+        if (this.limited('b:' + me.pid, 50000)) return fail('slow', 'Backed up a moment ago.', 429);
+        const data = String(body.data || ''); if (!data || data.length > MAX_SAVE) return fail('big', 'That career is too big to back up.');
+        this.sql.exec('INSERT INTO backups (pid, data, t) VALUES (?, ?, ?) ON CONFLICT (pid) DO UPDATE SET data = excluded.data, t = excluded.t', me.pid, data, now);
+        this.sql.exec('UPDATE players SET t = ? WHERE pid = ?', now, me.pid);
+        return json({ ok: true, t: now });
+      }
       if (path === 'save') {
         if (this.limited('v:' + me.pid, 10000) || this.limited('vi:' + ip, 10000)) return fail('slow', 'Wait a few seconds before making another code.', 429);
         const data = String(body.data || ''); if (!data || data.length > MAX_SAVE) return fail('big', 'That career is too big to send.');
