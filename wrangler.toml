@@ -1,0 +1,15 @@
+# Cloudflare Worker settings for the Saltshot Seas multiplayer server.
+# The name must match the Worker's name in the Cloudflare dashboard (it is the repository's name when you import it).
+name = "saltshot-seas-server"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# one Durable Object per room, SQLite-backed (included in the Workers Free plan)
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

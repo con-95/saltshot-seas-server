@@ -1,0 +1,54 @@
+// Checks the relay protocol against a running server: node protocol-test.mjs ws://localhost:8787
+const BASE = process.argv[2] || 'ws://localhost:8787';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let fails = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fails++; };
+function client(code, q) {
+  const ws = new WebSocket(`${BASE}/room/${code}?${q}`); const msgs = []; let closed = null;
+  ws.onmessage = e => { if (e.data !== 'pong') msgs.push(JSON.parse(e.data)); };
+  ws.onclose = e => { closed = e.code; };
+  return { ws, msgs, get closed() { return closed; }, send: o => ws.send(JSON.stringify(o)), last: t => [...msgs].reverse().find(m => m.t === t) };
+}
+const code = 'T' + 'QRS'.split('').sort(() => Math.random() - 0.5).join('');
+const a = client(code, 'mode=coop&create=1&name=Anne&v=52'); await sleep(300);
+ok(a.last('hello') && a.last('hello').id === 1 && a.last('hello').host === 1, 'creator gets id 1 and is host');
+const taken = client(code, 'mode=coop&create=1&name=X&v=52'); await sleep(300);
+ok(taken.last('err') && taken.last('err').code === 'taken' && taken.closed, 'second create of the same code is refused');
+const none = client('ZZZZ', 'mode=coop&name=X&v=52'); await sleep(300);
+ok(none.last('err') && none.last('err').code === 'noroom', 'joining an empty room is refused');
+const wrongMode = client(code, 'mode=arena&name=X&v=52'); await sleep(300);
+ok(wrongMode.last('err') && wrongMode.last('err').code === 'mode', 'mode mismatch refused');
+const wrongV = client(code, 'mode=coop&name=X&v=51'); await sleep(300);
+ok(wrongV.last('err') && wrongV.last('err').code === 'version', 'version mismatch refused');
+const b = client(code, 'mode=coop&name=Ben&v=52'); await sleep(300);
+const hb = b.last('hello');
+ok(hb && hb.id === 2 && hb.host === 1 && hb.players.length === 2, 'joiner gets id 2, host 1, sees two players');
+ok(a.last('join') && a.last('join').id === 2 && a.last('join').name === 'Ben', 'host is told who joined');
+const c = client(code, 'mode=coop&name=Cat&v=52'); const d = client(code, 'mode=coop&name=Dan&v=52'); await sleep(300);
+const e = client(code, 'mode=coop&name=Eve&v=52'); await sleep(300);
+ok(e.last('err') && e.last('err').code === 'full', 'a fifth captain is refused from a co-op room');
+a.send({ to: 0, t: 's', x: 5 }); await sleep(200);
+ok(b.last('s') && b.last('s').from === 1 && b.last('s').x === 5 && c.last('s') && d.last('s'), 'broadcast reaches everyone with from set');
+ok(!a.last('s'), 'sender does not get its own broadcast');
+b.send({ to: 1, t: 'd', v: 9 }); await sleep(200);
+ok(a.last('d') && a.last('d').from === 2 && !c.last('d') && !d.last('d'), 'a message to one player reaches only that player');
+for (const t of ['leave', 'host', 'hello', 'join', 'err']) b.send({ to: 0, t, id: 1, code: 'mode' });
+b.send({ from: 1, t: 'x' }); await sleep(250);
+ok(!c.msgs.some(m => ['leave', 'host', 'hello', 'join', 'err'].includes(m.t) && m.from !== undefined), "a player can't send the server's own messages");
+ok(c.last('x') && c.last('x').from === 2, "a player can't pretend to be someone else");
+a.ws.send('ping'); await sleep(100);
+a.ws.close(); await sleep(400);
+ok(b.last('leave') && b.last('leave').id === 1, 'others see the host leave');
+ok(b.last('host') && b.last('host').id === 2 && c.last('host').id === 2, 'the next captain becomes host');
+const f = client(code, 'mode=coop&name=Fay&v=52'); await sleep(300);
+ok(f.last('hello') && f.last('hello').host === 2 && f.last('hello').id === 5, 'a late joiner sees the new host and gets a fresh id');
+// flood: more than 40 a second are dropped
+let got = 0; const cnt = () => { got = c.msgs.filter(m => m.t === 'flood').length; };
+for (let i = 0; i < 80; i++) b.send({ to: 0, t: 'flood', i }); await sleep(400); cnt();
+ok(got >= 30 && got <= 41, 'flooding is cut to about 40 a second (got ' + got + ')');
+for (const x of [b, c, d, f]) x.ws.close(); await sleep(300);
+const again = client(code, 'mode=arena&create=1&name=Gus&v=52'); await sleep(300);
+ok(again.last('hello') && again.last('hello').id === 1 && again.last('hello').mode === 'arena', 'an emptied room can be opened again, even as an arena');
+const arena = []; for (let i = 0; i < 8; i++) arena.push(client(code, 'mode=arena&name=P' + i + '&v=52')); await sleep(500);
+ok(arena.filter(x => x.last('hello')).length === 7 && arena.filter(x => x.last('err') && x.last('err').code === 'full').length === 1, 'arena rooms hold 8 captains');
+again.ws.close(); arena.forEach(x => x.ws.close()); await sleep(200);
+console.log(fails ? fails + ' FAILED' : 'all passed'); process.exit(fails ? 1 : 0);

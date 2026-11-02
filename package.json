@@ -1,0 +1,13 @@
+{
+  "name": "saltshot-seas-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Relay server for Saltshot Seas multiplayer: a Cloudflare Worker with one Durable Object per room.",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "test:local": "node test/local-server.mjs 8787"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
